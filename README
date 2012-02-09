@@ -1,3 +1,4 @@
-Bagging.java will be in src/main/java
+NoiseDetector.java will be in src/main/java
 IOprocess.java will be in src/main/java/rml/io/  (for the package rml.io)
 Bagging.java will be in src/main/java/rml/classifiers/  (for the package rml.classifiers)
+OptionVal.java will be in src/main/java/rml/classifiers (for the package rml.classifiers)

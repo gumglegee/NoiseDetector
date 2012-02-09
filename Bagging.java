@@ -1,16 +1,25 @@
 package rml.classifiers;
 
+import java.awt.Point;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Random;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
+import weka.classifiers.Evaluation;
 import weka.classifiers.functions.SMO;
+import weka.classifiers.functions.supportVector.RBFKernel;
 import weka.core.Attribute;
 import weka.core.Instance;
 import weka.core.Instances;
 
 public class Bagging {
 
+	private static int FOLDNUM = 10;
+	
 	private int percentReplicates = 100;
 
 	private int numIterations = 10;
@@ -31,7 +40,33 @@ public class Bagging {
 	}
 
 	/**
-	 * 
+	 * Build the classifier with optimal parameters by grid search
+	 * @param dataSet
+	 * @throws Exception
+	 */
+	public void buildClassifier(Instances dataSet) throws Exception {
+		for (int indexIter = 0; indexIter < numIterations; indexIter++) {
+			Instances trainingSet = generateBagTrainingSet(dataSet);
+			
+			//TESTing only
+	//		System.out.println("Start parameter selection for Bag " + indexIter);
+	//		Point bestPara = gridSearch(smo, dataSet);
+	//		System.out.println("Optimal parameter for Bag " + indexIter + ": "+ bestPara.x + " " + bestPara.y);
+			
+			//grid search to get the optimal parameters for classifier
+			Point bestPara = gridSearchCV(dataSet);
+		
+			SMO smo = getBestClassifier(bestPara);
+			smo.buildClassifier(trainingSet);
+			
+			//add this model in the model list
+			modelLists.add(smo);	
+		}	//end for bagging iteration
+		
+	}
+	
+	/**
+	 * Build the classifier with arbitrary settings
 	 * @param smo
 	 * @param dataSet
 	 * @throws Exception
@@ -39,6 +74,7 @@ public class Bagging {
 	public void buildClassifier(SMO smo, Instances dataSet) throws Exception {
 		for (int indexIter = 0; indexIter < numIterations; indexIter++) {
 			Instances trainingSet = generateBagTrainingSet(dataSet);
+			
 			smo.buildClassifier(trainingSet);
 			
 			//add this model in the model list
@@ -101,7 +137,7 @@ public class Bagging {
 	}
 	
 	private Instances generateBagTrainingSet(Instances dataSet) {
-		int bagSize = dataSet.size() * percentReplicates / 100;
+		int bagSize = (int) (dataSet.size() * percentReplicates * 1.0 / 100.0);
 		
 		//init trainingSet
 		String relationName = dataSet.relationName() + "_bag";
@@ -136,6 +172,110 @@ public class Bagging {
 		}
 		
 		return indexMax;
+	}
+	
+	private int findMax(double[] oriArray) {
+		double largest = oriArray[0];
+		int indexMax = 0;
+		for (int index = 1; index < oriArray.length; index++) {
+			if (oriArray[index] >= largest) {
+				largest = oriArray[index];
+				indexMax = index;
+			}
+		}
+		
+		return indexMax;
+	}
+	
+	private Point gridSearch(SMO smo, Instances dataSet) throws Exception {
+		//generate grid
+		ArrayList<Point> grid = new ArrayList<Point>();
+		for (int indexC = 15; indexC > -6; indexC -= 2) {
+			for (int indexGamma = 3; indexGamma > -16; indexGamma -= 2) {
+				Point point = new Point();
+				point.x = indexC;
+				point.y = indexGamma;
+				
+				grid.add(point);
+			}
+		}
+		
+		
+		Random rand = new Random();
+		Instances randData = new Instances(dataSet);
+		randData.randomize(rand);
+		
+		OptionVal[] optThreads = new OptionVal[Bagging.FOLDNUM];
+		for (int foldIndex = 0; foldIndex < Bagging.FOLDNUM; foldIndex++) {
+			optThreads[foldIndex] = new OptionVal();
+			optThreads[foldIndex].setPrep(Bagging.FOLDNUM, foldIndex, randData, grid);
+			optThreads[foldIndex].start();
+		}	//for foldIndex
+		
+		for (int foldIndex = 0; foldIndex < Bagging.FOLDNUM; foldIndex++)
+			optThreads[foldIndex].join();
+		
+		double[] accRates = new double[grid.size()];
+		for (int pointIndex = 0; pointIndex < grid.size(); pointIndex++)
+			for (int foldIndex = 0; foldIndex < Bagging.FOLDNUM; foldIndex++) {
+				accRates[pointIndex] += optThreads[foldIndex].getAccRates()[pointIndex];
+			}
+		
+		//TESTing only
+	//	for (int pointIndex = 0; pointIndex < grid.size(); pointIndex++)
+	//		System.out.println(grid.get(pointIndex).x + " " + grid.get(pointIndex).y + " " + accRates[pointIndex]);
+		
+		int maxIndex = findMax(accRates);
+		
+	//	System.gc();
+		
+		return grid.get(maxIndex);
+	}
+	
+	public Point gridSearchCV(Instances dataSet) throws InterruptedException {
+		//generate grid
+		ArrayList<Point> grid = new ArrayList<Point>();
+		for (int indexC = 15; indexC > -6; indexC -= 2) {
+			for (int indexGamma = 3; indexGamma > -16; indexGamma -= 2) {
+				Point point = new Point();
+				point.x = indexC;
+				point.y = indexGamma;
+				
+				grid.add(point);
+			}
+		}
+		
+		OptionVal[] optThreads = new OptionVal[grid.size()];
+		for (int pointIndex = 0; pointIndex < grid.size(); pointIndex++) {
+			Point p = grid.get(pointIndex);
+			
+			optThreads[pointIndex] = new OptionVal();
+			optThreads[pointIndex].setPrep(Bagging.FOLDNUM, dataSet, p);
+			optThreads[pointIndex].start();
+		}
+		
+		for (int pointIndex = 0; pointIndex < grid.size(); pointIndex++)
+			optThreads[pointIndex].join();
+		
+		double[] accRates = new double[grid.size()];
+		for (int pointIndex = 0; pointIndex < grid.size(); pointIndex++)
+			accRates[pointIndex] = optThreads[pointIndex].getAccRate();
+		
+		int maxIndex = findMax(accRates);
+		
+		System.gc();
+			
+		return grid.get(maxIndex);
+	}
+	
+	private SMO getBestClassifier(Point bestPara) throws Exception {
+		RBFKernel rbf = new RBFKernel();
+		rbf.setOptions(weka.core.Utils.splitOptions("-G " + Math.pow(2, bestPara.y)));
+		SMO smo = new SMO();
+		smo.setC(Math.pow(2, bestPara.x));
+		smo.setKernel(rbf);
+		
+		return smo;
 	}
 	
 	public int getPercentReplicates() {
